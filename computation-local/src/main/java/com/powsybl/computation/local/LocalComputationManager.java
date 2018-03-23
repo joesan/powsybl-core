@@ -12,6 +12,7 @@ import com.powsybl.commons.config.PlatformConfig;
 import com.powsybl.commons.io.WorkingDirectory;
 import com.powsybl.computation.*;
 import io.reactivex.Maybe;
+import io.reactivex.functions.Action;
 import io.reactivex.schedulers.Schedulers;
 import net.java.truevfs.comp.zip.ZipEntry;
 import net.java.truevfs.comp.zip.ZipFile;
@@ -26,10 +27,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.*;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.zip.GZIPInputStream;
@@ -322,8 +320,11 @@ public class LocalComputationManager implements ComputationManager {
 
     @Override
     public <R> Maybe<R> execute2(ExecutionEnvironment environment, ExecutionHandler<R> handler) {
+        // dofinally{} before finally{} cached in try-with-resources
+        final DisposeAction disposeAction = new DisposeAction();
         return Maybe.<R>create(emitter -> {
             try (WorkingDirectory workingDir = new WorkingDirectory(config.getLocalDir(), environment.getWorkingDirPrefix(), environment.isDebug())) {
+                disposeAction.workingDirectory = workingDir;
                 List<CommandExecution> commandExecutionList = handler.before(workingDir.toPath());
                 ExecutionReport report = null;
                 enter();
@@ -341,7 +342,22 @@ public class LocalComputationManager implements ComputationManager {
             } catch (Exception e) {
                 emitter.onError(e);
             }
-        }).subscribeOn(Schedulers.from(threadPools));
+        }).doOnDispose(() -> disposeAction.run()).subscribeOn(Schedulers.from(threadPools));
+    }
+
+    private final class DisposeAction implements Action {
+
+        private WorkingDirectory workingDirectory;
+
+        private DisposeAction() {
+        }
+
+        @Override
+        public void run() throws Exception {
+            if (workingDirectory != null) {
+                localCommandExecutor.stop(workingDirectory.toPath());
+            }
+        }
     }
 
     @Override
