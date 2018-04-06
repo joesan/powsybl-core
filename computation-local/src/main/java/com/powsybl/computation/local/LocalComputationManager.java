@@ -320,6 +320,8 @@ public class LocalComputationManager implements ComputationManager {
 
     @Override
     public <R> Maybe<R> execute2(ExecutionEnvironment environment, ExecutionHandler<R> handler) {
+        Objects.requireNonNull(environment);
+        Objects.requireNonNull(handler);
         // dofinally{} before finally{} cached in try-with-resources
         final DisposeAction disposeAction = new DisposeAction();
         return Maybe.<R>create(emitter -> {
@@ -362,8 +364,6 @@ public class LocalComputationManager implements ComputationManager {
 
     @Override
     public <R> CompletableFuture<R> execute(ExecutionEnvironment environment, ExecutionHandler<R> handler) {
-        Objects.requireNonNull(environment);
-        Objects.requireNonNull(handler);
         return new MaybeCompletableFuture<>(execute2(environment, handler));
     }
 
