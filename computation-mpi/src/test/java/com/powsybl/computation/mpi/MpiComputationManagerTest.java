@@ -113,20 +113,17 @@ public class MpiComputationManagerTest {
         }
     }
 
-    private ComputationManager cm;
     private FileSystem fileSystem;
+    private Path tmpDir;
 
     @Before
     public void setUp() throws Exception {
         fileSystem = Jimfs.newFileSystem(Configuration.unix());
-        Path tmpDir = Files.createDirectory(fileSystem.getPath("/tmp"));
-        cm = new MpiComputationManager(tmpDir, new MpiNativeServicesMock());
+        tmpDir = Files.createDirectory(fileSystem.getPath("/tmp"));
     }
 
     @After
     public void tearDown() throws Exception {
-        cm.close();
-        cm = null;
         fileSystem.close();
         fileSystem = null;
     }
@@ -200,20 +197,22 @@ public class MpiComputationManagerTest {
     @Test
     public void testExecute() throws Exception {
         final Path[] workingDirSav = new Path[1];
-        String result = cm.execute(ExecutionEnvironment.createDefault(), new ExecutionHandlerTest1() {
+        try (ComputationManager cm = new MpiComputationManager(tmpDir, new MpiNativeServicesMock())) {
+            String result = cm.execute(ExecutionEnvironment.createDefault(), new ExecutionHandlerTest1() {
                 @Override
                 public List<CommandExecution> before(Path workingDir) throws IOException {
                     workingDirSav[0] = workingDir;
                     return super.before(workingDir);
                 }
             }).join();
-        assertTrue(OUTPUT_FILE_CONTENT_1.equals(result));
+            assertTrue(OUTPUT_FILE_CONTENT_1.equals(result));
+        }
     }
 
     @Test
     public void testExecute2() throws Exception {
         final Path[] workingDirSav = new Path[1];
-        try {
+        try (ComputationManager cm = new MpiComputationManager(tmpDir, new MpiNativeServicesMock())) {
             cm.execute(ExecutionEnvironment.createDefault(), new ExecutionHandlerTest1() {
                     @Override
                     public List<CommandExecution> before(Path workingDir) throws IOException {
@@ -230,7 +229,7 @@ public class MpiComputationManagerTest {
     @Test
     public void testExecute3() throws Exception {
         final Path[] workingDirSav = new Path[1];
-        try {
+        try (ComputationManager cm = new MpiComputationManager(tmpDir, new MpiNativeServicesMock())) {
             cm.execute(ExecutionEnvironment.createDefault(), new ExecutionHandlerTest1() {
                 @Override
                 public List<CommandExecution> before(Path workingDir) throws IOException {
@@ -251,7 +250,8 @@ public class MpiComputationManagerTest {
     @Test
     public void testExecute4() throws Exception {
         final Path[] workingDirSav = new Path[1];
-        String result = cm.execute(ExecutionEnvironment.createDefault(), new ExecutionHandlerTest2() {
+        try (ComputationManager cm = new MpiComputationManager(tmpDir, new MpiNativeServicesMock())) {
+            String result = cm.execute(ExecutionEnvironment.createDefault(), new ExecutionHandlerTest2() {
                 @Override
                 public List<CommandExecution> before(Path workingDir) throws IOException {
                     workingDirSav[0] = workingDir;
@@ -266,7 +266,8 @@ public class MpiComputationManagerTest {
                     return result;
                 }
             }).join();
-        assertTrue(OUTPUT_FILE_CONTENT_2.equals(result));
+            assertTrue(OUTPUT_FILE_CONTENT_2.equals(result));
+        }
     }
 
 }
