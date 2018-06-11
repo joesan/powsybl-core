@@ -35,6 +35,7 @@ class ActionDslLoader extends DslLoader {
 
         String description
         ExpressionNode when
+        String[] hypoContingenies
         String[] apply
         String[] test
         int life = 1
@@ -51,6 +52,11 @@ class ActionDslLoader extends DslLoader {
         void when(boolean b) {
             ExpressionNode node = new BooleanLiteralNode(b)
             when(node)
+        }
+
+        void hypoContingenies(String[] contingencies) {
+            assert contingencies != null && contingencies.length > 0
+            this.hypoContingenies = contingencies
         }
 
         void apply(String[] apply) {
@@ -193,7 +199,8 @@ class ActionDslLoader extends DslLoader {
                     type = RuleType.APPLY;
                 }
 
-                Rule rule = new Rule(id, new ExpressionCondition(ruleSpec.when), ruleSpec.life, type,
+                List<String> hypoContingencies = ruleSpec.hypoContingenies == null ? Collections.emptyList() : Arrays.asList(ruleSpec.hypoContingenies)
+                Rule rule = new Rule(id, new ExpressionCondition(ruleSpec.when, hypoContingencies), ruleSpec.life, type,
                         actions)
                 if (ruleSpec.description) {
                     rule.setDescription(ruleSpec.description)

@@ -8,6 +8,8 @@ package com.powsybl.action.dsl;
 
 import com.powsybl.action.dsl.ast.ExpressionNode;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -17,13 +19,25 @@ public class ExpressionCondition implements Condition {
 
     private final ExpressionNode node;
 
+    private final List<String> hypoContingencies;
+
     public ExpressionCondition(ExpressionNode node) {
+        this(node, Collections.emptyList());
+    }
+
+    public ExpressionCondition(ExpressionNode node, List<String> hypoContingencies) {
         this.node = Objects.requireNonNull(node);
+        this.hypoContingencies = Objects.requireNonNull(hypoContingencies);
     }
 
     @Override
     public ConditionType getType() {
         return ConditionType.EXPRESSION;
+    }
+
+    @Override
+    public List<String> getHypoContingencies() {
+        return Collections.unmodifiableList(hypoContingencies);
     }
 
     public ExpressionNode getNode() {

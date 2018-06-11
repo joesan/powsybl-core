@@ -6,10 +6,14 @@
  */
 package com.powsybl.action.dsl;
 
+import java.util.List;
+
 /**
  * @author Geoffroy Jamgotchian <geoffroy.jamgotchian at rte-france.com>
  */
 public interface Condition {
 
     ConditionType getType();
+
+    List<String> getHypoContingencies();
 }

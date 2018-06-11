@@ -29,6 +29,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * @author Geoffroy Jamgotchian <geoffroy.jamgotchian at rte-france.com>
@@ -50,6 +51,10 @@ public class LoadFlowActionSimulator implements ActionSimulator {
 
     private final List<LoadFlowActionSimulatorObserver> observers;
 
+    private final LoadFlowParameters loadFlowParameters = LoadFlowParameters.load();
+
+    private final LoadFlowFactory loadFlowFactory;
+
     public LoadFlowActionSimulator(Network network, ComputationManager computationManager) {
         this(network, computationManager, LoadFlowActionSimulatorConfig.load(), false, Collections.emptyList());
     }
@@ -66,6 +71,7 @@ public class LoadFlowActionSimulator implements ActionSimulator {
         this.config = Objects.requireNonNull(config);
         this.observers = Objects.requireNonNull(observers);
         this.applyIfSolvedViolations = applyIfSolvedViolations;
+        this.loadFlowFactory = newLoadFlowFactory();
     }
 
     @Override
@@ -81,6 +87,8 @@ public class LoadFlowActionSimulator implements ActionSimulator {
     @Override
     public void start(ActionDb actionDb, List<String> contingencyIds) {
         Objects.requireNonNull(actionDb);
+
+        startPreventiveAnalysis(actionDb, network);
 
         LOGGER.info("Starting pre-contingency analysis");
         RunningContext runningContext = new RunningContext(network);
@@ -111,6 +119,72 @@ public class LoadFlowActionSimulator implements ActionSimulator {
         }
 
         observers.forEach(LoadFlowActionSimulatorObserver::afterPostContingencyAnalysis);
+    }
+
+    private void startPreventiveAnalysis(ActionDb actionDb, Network network) {
+        byte[] initNetworkGz = NetworkXml.gzip(network);
+
+        actionDb.getRules().stream()
+                .filter(rule -> !rule.getCondition().getHypoContingencies().isEmpty())
+                .forEach(rule -> {
+                    Network networkStateN = NetworkXml.gunzip(initNetworkGz);
+                    Network networkHypo = NetworkXml.gunzip(initNetworkGz);
+                    rule.getCondition().getHypoContingencies().stream().map(actionDb::getContingency).forEach(contingency -> {
+                        contingency.toTask().modify(networkHypo, computationManager);
+                        LOGGER.info("Starting preventive analyse on '{}' with contingency '{}'", rule.getId(), contingency.getId());
+                        LoadFlow loadFlowHypo = loadFlowFactory.create(networkHypo, computationManager, 0);
+                        LoadFlowResult loadFlowResultHypo = null;
+                        try {
+                            loadFlowResultHypo = loadFlowHypo.run(loadFlowParameters);
+                        } catch (Exception e) {
+                            throw new PowsyblException(e);
+                        }
+                        EvaluationContext evalContext = new EvaluationContext() {
+                            @Override
+                            public Network getNetwork() {
+                                return networkHypo;
+                            }
+
+                            @Override
+                            public Contingency getContingency() {
+                                return contingency;
+                            }
+
+                            @Override
+                            public boolean isActionTaken(String actionId) {
+                                return false;
+                            }
+                        };
+                        boolean ok = ExpressionEvaluator.evaluate(((ExpressionCondition) rule.getCondition()).getNode(), evalContext).equals(Boolean.TRUE);
+                        if (ok) {
+                            rule.getActions().stream().map(actionDb::getAction).forEach(action -> action.run(networkStateN, computationManager));
+                            LoadFlow loadFlowStateN = loadFlowFactory.create(networkStateN, computationManager, 0);
+                            LoadFlowResult resultStateN = null;
+                            try {
+                                resultStateN = loadFlowStateN.run(loadFlowParameters);
+                            } catch (Exception e) {
+                                throw new PowsyblException(e);
+                            }
+                            if (resultStateN.isOk() && loadFlowResultHypo.isOk()) {
+                                List<LimitViolation> stateNVios = LIMIT_VIOLATION_FILTER.apply(Security.checkLimits(networkStateN, 1), networkStateN);
+                                List<LimitViolation> hypoVios = LIMIT_VIOLATION_FILTER.apply(Security.checkLimits(networkHypo, 1), networkHypo);
+                                if (stateNVios.isEmpty() && hypoVios.isEmpty()) {
+                                    LOGGER.debug("PREVENTIVE OK '{}'", rule.getId());
+                                } else {
+                                    LOGGER.debug("StateN vios: {}", stateNVios);
+                                    System.out.println(Security.printLimitsViolations(stateNVios, networkStateN, LoadFlowActionSimulator.NO_FILTER));
+                                    LOGGER.debug("Hypo vios: {}", hypoVios);
+                                    System.out.println(Security.printLimitsViolations(hypoVios, networkHypo, LoadFlowActionSimulator.NO_FILTER));
+                                }
+                            } else {
+                                LOGGER.debug("StateN Loadflow's OK : {}", resultStateN.isOk());
+                                LOGGER.debug("Hypo Loadflow's OK : {}", loadFlowResultHypo.isOk());
+                            }
+                        } else {
+                            LOGGER.debug("'{}' is not actived.", rule.getId());
+                        }
+                    });
+                });
     }
 
     protected LoadFlowFactory newLoadFlowFactory() {
@@ -215,7 +289,7 @@ public class LoadFlowActionSimulator implements ActionSimulator {
         }
     }
 
-    private boolean checkViolations(ActionDb actionDb, RunningContext context) {
+    private boolean checkViolationsAndContinueDoNext(ActionDb actionDb, RunningContext context) {
         List<LimitViolation> violations = LIMIT_VIOLATION_FILTER.apply(Security.checkLimits(context.getNetwork(), 1), context.getNetwork());
         observers.forEach(o -> o.loadFlowConverged(context, violations));
         // no more violations => work complete
@@ -235,10 +309,8 @@ public class LoadFlowActionSimulator implements ActionSimulator {
         }
 
         Set<String> actionsTaken = new HashSet<>();
-        for (Rule rule : actionDb.getRules()) {
-            if (rule.getType().equals(RuleType.TEST)) {
-                continue;
-            }
+        Stream<Rule> nonPreventifRules = actionDb.getRules().stream().filter(r -> r.getCondition().getHypoContingencies().isEmpty());
+        nonPreventifRules.filter(r -> !r.getType().equals(RuleType.TEST)).forEach(rule -> {
             RuleContext ruleContext;
             if (context.getRuleMatchCount(rule.getId()) >= rule.getLife()) {
                 ruleContext = new RuleContext(RuleEvaluationStatus.DEAD, Collections.emptyMap(), Collections.emptyMap());
@@ -251,7 +323,7 @@ public class LoadFlowActionSimulator implements ActionSimulator {
             if (ruleContext.getStatus() == RuleEvaluationStatus.TRUE) {
                 applyActions(actionDb, context, rule, actionsTaken);
             }
-        }
+        });
 
         // record the action in the time line
         context.getTimeLine().getActions().addAll(actionsTaken);
@@ -275,7 +347,6 @@ public class LoadFlowActionSimulator implements ActionSimulator {
 
         observers.forEach(o -> o.roundBegin(context));
 
-        LoadFlowFactory loadFlowFactory = newLoadFlowFactory();
         LoadFlow loadFlow = loadFlowFactory.create(context.getNetwork(), computationManager, 0);
 
         LOGGER.info("Running loadflow ({})", loadFlow.getName());
@@ -286,7 +357,7 @@ public class LoadFlowActionSimulator implements ActionSimulator {
             throw new PowsyblException(e);
         }
         if (result.isOk()) {
-            return checkViolations(actionDb, context);
+            return checkViolationsAndContinueDoNext(actionDb, context);
         } else {
             LOGGER.warn("Loadflow diverged: {}", result.getMetrics());
             observers.forEach(o -> o.loadFlowDiverged(context));
@@ -313,14 +384,18 @@ public class LoadFlowActionSimulator implements ActionSimulator {
             }
         };
 
-        List<Rule> activedRules = actionDb.getRules().stream()
+        List<Rule> activedTestRules = actionDb.getRules().stream()
+                .filter(rule -> rule.getCondition().getHypoContingencies().isEmpty())
                 .filter(rule -> rule.getType().equals(RuleType.TEST))
                 .filter(rule -> {
                     ExpressionNode conditionExpr = ((ExpressionCondition) rule.getCondition()).getNode();
                     return ExpressionEvaluator.evaluate(conditionExpr, evalContext).equals(Boolean.TRUE);
                 })
                 .collect(Collectors.toList());
-        List<String> testActionIds = activedRules.stream()
+        if (activedTestRules.isEmpty()) {
+            return;
+        }
+        List<String> testActionIds = activedTestRules.stream()
                                 .flatMap(r -> r.getActions().stream())
                                 .distinct()
                                 .filter(id -> !context.isTested(id))
@@ -366,7 +441,6 @@ public class LoadFlowActionSimulator implements ActionSimulator {
         String actionId = action.getId();
         LOGGER.info("Test action '{}'", actionId);
         action.run(networkForTry, computationManager);
-        LoadFlowFactory loadFlowFactory = newLoadFlowFactory();
         LoadFlow testLoadFlow = loadFlowFactory.create(networkForTry, computationManager, 0);
         try {
             observers.stream().forEach(o -> o.beforeTest(context, actionId));
