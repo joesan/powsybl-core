@@ -41,7 +41,7 @@ public class SecurityAnalysisImpl extends AbstractSecurityAnalysis {
     }
 
     public SecurityAnalysisImpl(Network network, LimitViolationDetector detector, LimitViolationFilter filter,
-                                ComputationManager computationManager, LoadFlowFactory loadFlowFactory) {
+                ComputationManager computationManager, LoadFlowFactory loadFlowFactory) {
         super(network, detector, filter);
 
         this.computationManager = Objects.requireNonNull(computationManager);
@@ -85,9 +85,8 @@ public class SecurityAnalysisImpl extends AbstractSecurityAnalysis {
 
                         resultBuilder.preContingency()
                                 .setComputationOk(true);
-                        violationDetector.checkAll(network, resultBuilder::addViolation);
+                        violationDetector.checkAll(null, network, resultBuilder::addViolation);
                         resultBuilder.endPreContingency();
-
 
                         List<Contingency> contingencies = contingenciesProvider.getContingencies(network);
 
@@ -116,7 +115,7 @@ public class SecurityAnalysisImpl extends AbstractSecurityAnalysis {
 
                                         resultBuilder.contingency(contingency)
                                                 .setComputationOk(lfResult.isOk());
-                                        violationDetector.checkAll(network, resultBuilder::addViolation);
+                                        violationDetector.checkAll(contingency, network, resultBuilder::addViolation);
                                         resultBuilder.endContingency();
 
                                         network.getStateManager().removeState(postContStateId);

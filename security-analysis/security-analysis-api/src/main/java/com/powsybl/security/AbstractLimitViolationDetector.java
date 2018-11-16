@@ -6,6 +6,7 @@
  */
 package com.powsybl.security;
 
+import com.powsybl.contingency.Contingency;
 import com.powsybl.iidm.network.Branch;
 import com.powsybl.iidm.network.Bus;
 import com.powsybl.iidm.network.Network;
@@ -25,35 +26,35 @@ public abstract class AbstractLimitViolationDetector implements LimitViolationDe
      * This implementation takes the current value to be checked from the Network.
      */
     @Override
-    public void checkCurrent(Branch branch, Branch.Side side, Consumer<LimitViolation> consumer) {
-        checkCurrent(branch, side, branch.getTerminal(side).getI(), consumer);
+    public void checkCurrent(Contingency contingency, Branch branch, Branch.Side side, Consumer<LimitViolation> consumer) {
+        checkCurrent(contingency, branch, side, branch.getTerminal(side).getI(), consumer);
     }
 
     /**
      * This implementation takes the voltage value to be checked from the Network.
      */
     @Override
-    public void checkVoltage(Bus bus, Consumer<LimitViolation> consumer) {
-        checkVoltage(bus, bus.getV(), consumer);
+    public void checkVoltage(Contingency contingency, Bus bus, Consumer<LimitViolation> consumer) {
+        checkVoltage(contingency, bus, bus.getV(), consumer);
     }
 
     @Override
-    public void checkVoltage(VoltageLevel voltageLevel, Consumer<LimitViolation> consumer) {
-        voltageLevel.getBusView().getBusStream().forEach(b -> checkVoltage(b, consumer));
+    public void checkVoltage(Contingency contingency, VoltageLevel voltageLevel, Consumer<LimitViolation> consumer) {
+        voltageLevel.getBusView().getBusStream().forEach(b -> checkVoltage(contingency, b, consumer));
     }
 
     @Override
-    public void checkCurrent(Branch branch, Consumer<LimitViolation> consumer) {
-        checkCurrent(branch, Branch.Side.ONE, consumer);
-        checkCurrent(branch, Branch.Side.TWO, consumer);
+    public void checkCurrent(Contingency contingency, Branch branch, Consumer<LimitViolation> consumer) {
+        checkCurrent(contingency, branch, Branch.Side.ONE, consumer);
+        checkCurrent(contingency, branch, Branch.Side.TWO, consumer);
     }
 
     @Override
-    public void checkAll(Network network, Consumer<LimitViolation> consumer) {
-        network.getBranchStream().forEach(b -> checkCurrent(b, consumer));
+    public void checkAll(Contingency contingency, Network network, Consumer<LimitViolation> consumer) {
+        network.getBranchStream().forEach(b -> checkCurrent(contingency, b, consumer));
         network.getVoltageLevelStream()
                 .flatMap(v -> v.getBusView().getBusStream())
-                .forEach(b -> checkVoltage(b, consumer));
+                .forEach(b -> checkVoltage(contingency, b, consumer));
     }
 
 }

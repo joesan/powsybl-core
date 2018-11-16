@@ -41,7 +41,7 @@ public class SecurityAnalysisChecksTest {
 
         List<LimitViolation> violations = new ArrayList<>();
         LimitViolationDetector detector = new DefaultLimitViolationDetector(Collections.singleton(Security.CurrentLimitType.PATL));
-        detector.checkCurrent(line, Branch.Side.TWO, 1101, violations::add);
+        detector.checkCurrent(null, line, Branch.Side.TWO, 1101, violations::add);
 
         Assertions.assertThat(violations)
                 .hasSize(1)
@@ -49,7 +49,7 @@ public class SecurityAnalysisChecksTest {
 
         violations = new ArrayList<>();
         detector = new DefaultLimitViolationDetector(Collections.singleton(Security.CurrentLimitType.TATL));
-        detector.checkCurrent(line, Branch.Side.TWO, 1201, violations::add);
+        detector.checkCurrent(null, line, Branch.Side.TWO, 1201, violations::add);
 
         Assertions.assertThat(violations)
                 .hasSize(1)
@@ -64,7 +64,7 @@ public class SecurityAnalysisChecksTest {
         LimitViolationDetector detector = new DefaultLimitViolationDetector();
 
         List<LimitViolation> violations = new ArrayList<>();
-        vl.getBusView().getBusStream().forEach(b -> detector.checkVoltage(b, 380, violations::add));
+        vl.getBusView().getBusStream().forEach(b -> detector.checkVoltage(null, b, 380, violations::add));
 
         assertEquals(1, violations.size());
         LimitViolation violation = violations.get(0);
@@ -72,7 +72,7 @@ public class SecurityAnalysisChecksTest {
         assertEquals(LimitViolationType.LOW_VOLTAGE, violation.getLimitType());
 
         violations.clear();
-        vl.getBusView().getBusStream().forEach(b -> detector.checkVoltage(b, 520, violations::add));
+        vl.getBusView().getBusStream().forEach(b -> detector.checkVoltage(null, b, 520, violations::add));
 
         assertEquals(1, violations.size());
         violation = violations.get(0);

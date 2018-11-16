@@ -7,24 +7,22 @@
 package com.powsybl.security;
 
 import com.google.auto.service.AutoService;
+import com.powsybl.commons.config.ConfigurationException;
 import com.powsybl.commons.io.table.AsciiTableFormatterFactory;
 import com.powsybl.commons.io.table.TableFormatterConfig;
-import com.powsybl.computation.ComputationManager;
 import com.powsybl.computation.Partition;
 import com.powsybl.contingency.ContingenciesProvider;
 import com.powsybl.contingency.ContingenciesProviders;
 import com.powsybl.iidm.import_.Importers;
 import com.powsybl.iidm.network.Network;
+import com.powsybl.security.config.SecurityAnalysisConfigurer;
+import com.powsybl.security.config.SecurityAnalysisConfigurers;
 import com.powsybl.security.converter.SecurityAnalysisResultExporters;
-import com.powsybl.security.distributed.DistributedSecurityAnalysis;
-import com.powsybl.security.distributed.ExternalSecurityAnalysis;
-import com.powsybl.security.distributed.ExternalSecurityAnalysisConfig;
-import com.powsybl.security.distributed.SubContingenciesProvider;
-import com.powsybl.security.interceptors.SecurityAnalysisInterceptor;
 import com.powsybl.security.interceptors.SecurityAnalysisInterceptors;
 import com.powsybl.security.json.JsonSecurityAnalysisParameters;
 import com.powsybl.tools.Command;
 import com.powsybl.tools.Tool;
+import com.powsybl.tools.ToolOptions;
 import com.powsybl.tools.ToolRunningContext;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
@@ -34,8 +32,8 @@ import org.apache.commons.cli.ParseException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.file.Path;
-import java.util.*;
-import java.util.stream.Collectors;
+import java.util.Arrays;
+import java.util.Optional;
 
 import static com.powsybl.tools.ToolConstants.TASK;
 import static com.powsybl.tools.ToolConstants.TASK_COUNT;
@@ -52,6 +50,7 @@ public class SecurityAnalysisTool implements Tool {
     private static final String OUTPUT_FILE_OPTION = "output-file";
     private static final String OUTPUT_FORMAT_OPTION = "output-format";
     private static final String CONTINGENCIES_FILE_OPTION = "contingencies-file";
+    private static final String CONFIG_FILE_OPTION = "config-file";
     private static final String WITH_EXTENSIONS_OPTION = "with-extensions";
     private static final String EXTERNAL = "external";
 
@@ -107,6 +106,11 @@ public class SecurityAnalysisTool implements Tool {
                     .hasArg()
                     .argName("FILE")
                     .build());
+                options.addOption(Option.builder().longOpt(CONFIG_FILE_OPTION)
+                        .desc("the config file path")
+                        .hasArg()
+                        .argName("FILE")
+                        .build());
                 options.addOption(Option.builder().longOpt(WITH_EXTENSIONS_OPTION)
                     .desc("the extension list to enable")
                     .hasArg()
@@ -139,82 +143,76 @@ public class SecurityAnalysisTool implements Tool {
     }
 
 
-    private static Optional<String> getOptionValue(CommandLine line, String option) {
-        return line.hasOption(option) ? Optional.of(line.getOptionValue(option)) : Optional.empty();
-    }
-
     @Override
     public void run(CommandLine line, ToolRunningContext context) throws Exception {
-        Path caseFile = context.getFileSystem().getPath(line.getOptionValue(CASE_FILE_OPTION));
 
-        Set<LimitViolationType> limitViolationTypes = line.hasOption(LIMIT_TYPES_OPTION)
-            ? Arrays.stream(line.getOptionValue(LIMIT_TYPES_OPTION).split(",")).map(LimitViolationType::valueOf).collect(Collectors.toSet())
-            : EnumSet.allOf(LimitViolationType.class);
+        ToolOptions options = new ToolOptions(line, context);
 
-        //Required extensions names
-        List<String> extensions = getOptionValue(line, WITH_EXTENSIONS_OPTION)
-                .map(s -> Arrays.stream(s.split(","))
-                                .filter(ext -> !ext.isEmpty())
-                                .collect(Collectors.toList()))
-                .orElse(Collections.emptyList());
-        Set<SecurityAnalysisInterceptor> interceptors = extensions.stream().map(SecurityAnalysisInterceptors::createInterceptor).collect(Collectors.toSet());
+        Path caseFile = options.getPath(CASE_FILE_OPTION).orElseThrow(AssertionError::new);
 
         // Output file and output format
         Path outputFile = null;
         String format = null;
-        if (line.hasOption(OUTPUT_FILE_OPTION)) {
-            outputFile = context.getFileSystem().getPath(line.getOptionValue(OUTPUT_FILE_OPTION));
-            if (!line.hasOption(OUTPUT_FORMAT_OPTION)) {
-                throw new ParseException("Missing required option: " + OUTPUT_FORMAT_OPTION);
-            }
-            format = line.getOptionValue(OUTPUT_FORMAT_OPTION);
+        if (options.hasOption(OUTPUT_FILE_OPTION)) {
+            outputFile = options.getPath(OUTPUT_FILE_OPTION).orElseThrow(AssertionError::new);
+            format = options.getValue(OUTPUT_FORMAT_OPTION)
+                    .orElseThrow(() -> new ParseException("Missing required option: " + OUTPUT_FORMAT_OPTION));
         }
 
         // Contingencies file
-        Path contingenciesFile = getOptionValue(line, CONTINGENCIES_FILE_OPTION).map(context.getFileSystem()::getPath).orElse(null);
-
         context.getOutputStream().println("Loading network '" + caseFile + "'");
         Network network = Importers.loadNetwork(caseFile);
 
-        LimitViolationFilter limitViolationFilter = LimitViolationFilter.load();
-        limitViolationFilter.setViolationTypes(limitViolationTypes);
-
-        ContingenciesProvider contingenciesProvider = contingenciesFile != null ?
-            ContingenciesProviders.newDefaultFactory().create(contingenciesFile) : ContingenciesProviders.emptyProvider();
-
-        ComputationManager computationManager = context.getLongTimeExecutionComputationManager();
-
-        if (line.hasOption(TASK)) {
-            Partition partition = Partition.parse(line.getOptionValue(TASK));
-            contingenciesProvider = new SubContingenciesProvider(contingenciesProvider, partition);
-            computationManager = context.getShortTimeExecutionComputationManager();
-        }
+        SecurityAnalysisInputs inputs = new SecurityAnalysisInputs();
 
         SecurityAnalysisParameters parameters = SecurityAnalysisParameters.load();
-        if (line.hasOption(PARAMETERS_FILE)) {
-            Path parametersFile = context.getFileSystem().getPath(line.getOptionValue(PARAMETERS_FILE));
-            JsonSecurityAnalysisParameters.update(parameters, parametersFile);
+        options.getPath(PARAMETERS_FILE).ifPresent(f -> JsonSecurityAnalysisParameters.update(parameters, f));
+        inputs.setParameters(parameters);
+
+        options.getPath(CONTINGENCIES_FILE_OPTION)
+                .map(f -> (ContingenciesProvider) ContingenciesProviders.newDefaultFactory().create(f))
+                .ifPresent(inputs::setContingencies);
+
+
+        Optional<Path> dslFile = options.getPath(CONFIG_FILE_OPTION);
+        if (dslFile.isPresent()) {
+            SecurityAnalysisConfigurer configurer = SecurityAnalysisConfigurers.getDefaultFactory()
+                    .map(f -> f.create(dslFile.get()))
+                    .orElseThrow(() -> new ConfigurationException("No security analysis configurer is defined, cannot handle config file."));
+
+            configurer.configure(network, inputs);
         }
 
 
-        SecurityAnalysis securityAnalysis;
-        if (line.hasOption(EXTERNAL)) {
-            Integer taskCount = getOptionValue(line, TASK_COUNT).map(Integer::parseInt).orElse(null);
-            ExternalSecurityAnalysisConfig config = ExternalSecurityAnalysisConfig.load();
-            securityAnalysis = new ExternalSecurityAnalysis(config, network, computationManager, extensions, taskCount);
-        } else if (line.hasOption(TASK_COUNT)) {
-            int taskCount = Integer.parseInt(line.getOptionValue(TASK_COUNT));
-            ExternalSecurityAnalysisConfig config = ExternalSecurityAnalysisConfig.load();
-            securityAnalysis = new DistributedSecurityAnalysis(config, network, computationManager, extensions, taskCount);
-        } else {
-            securityAnalysis = SecurityAnalysisFactories.newDefaultFactory()
-                    .create(network, new DefaultLimitViolationDetector(), limitViolationFilter, computationManager, 0);
-            interceptors.forEach(securityAnalysis::addInterceptor);
+        // Build security analysis : common inputs
+        SecurityAnalysisBuilder builder = new SecurityAnalysisBuilder()
+                .network(network)
+                .computationManager(context.getLongTimeExecutionComputationManager())
+                .detector(inputs.getLimitViolationDetector());
+
+        options.getValue(LIMIT_TYPES_OPTION).ifPresent(builder::limitViolationTypes);
+        options.getValue(WITH_EXTENSIONS_OPTION).ifPresent(builder::extensions);
+
+        // Computation distribution options
+        Integer taskCount = options.getInt(TASK_COUNT).orElse(null);
+        boolean external = options.hasOption(EXTERNAL);
+        Partition partition = options.getValue(TASK, Partition::parse).orElse(null);
+        if (external) {
+            if (taskCount != null) {
+                builder.external(taskCount);
+            } else {
+                builder.external();
+            }
+        } else if (partition != null) {
+            builder.computationManager(context.getShortTimeExecutionComputationManager());
+            builder.subTask(partition);
         }
+
+        SecurityAnalysis securityAnalysis = builder.build();
 
         String currentState = network.getStateManager().getWorkingStateId();
 
-        SecurityAnalysisResult result = securityAnalysis.run(currentState, parameters, contingenciesProvider).join();
+        SecurityAnalysisResult result = securityAnalysis.run(currentState, inputs.getParameters(), inputs.getContingenciesProvider()).join();
 
         if (!result.getPreContingencyResult().isComputationOk()) {
             context.getErrorStream().println("Pre-contingency state divergence");
