@@ -12,6 +12,31 @@ import org.codehaus.groovy.control.CompilationFailedException
 import java.util.function.Consumer
 
 /**
+ * Implementation of the current limits DSL.
+ * Defines the methods to define factors for specified current limits, for instance:
+ *
+ * <pre>
+ * current_limits {
+ *     N_situation {
+ *         permanent {
+ *             factor 0.95
+ *         }
+ *
+ *         temporary {
+ *             factor 1.0
+ *         }
+ *     }
+ *
+ *     contingency('contingency1') {
+ *       factor 0.99
+ *     }
+ *
+ *     any_contingency {
+ *         factor 0.98
+ *     }
+ * }
+ * </pre>
+ *
  * @author Sylvain Leclerc <sylvain.leclerc at rte-france.com>
  */
 class LimitFactorsLoader extends DslLoader {
@@ -116,7 +141,7 @@ class LimitFactorsLoader extends DslLoader {
 
         ExpressionDslLoader.prepareClosures(binding)
 
-        binding.currentLimits = { Closure cl -> handler.accept(createFactors(cl)) }
+        binding.current_limits = { Closure cl -> handler.accept(createFactors(cl)) }
 
     }
 

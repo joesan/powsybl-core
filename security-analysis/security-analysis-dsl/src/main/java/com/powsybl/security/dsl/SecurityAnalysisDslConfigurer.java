@@ -24,6 +24,11 @@ import java.nio.file.Path;
 import java.util.Objects;
 
 /**
+ * A {@link SecurityAnalysisConfigurer} which reads the configuration from a DSL groovy script.
+ * The DSL may be defined by multiple services implementing {@link SecurityAnalysisDsl} service.
+ * All DSLs will be loaded before actually executing the script
+ * by calling the {@link #configure(Network, SecurityAnalysisInputs)} method.
+ *
  * @author Sylvain Leclerc <sylvain.leclerc at rte-france.com>
  */
 public class SecurityAnalysisDslConfigurer implements SecurityAnalysisConfigurer {

@@ -17,6 +17,9 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
 /**
+ * An implementation of {@link SecurityAnalysis} which executes only
+ * the specified {@link Partition} of a security analysis.
+ *
  * @author Sylvain Leclerc <sylvain.leclerc at rte-france.com>
  */
 public class SecurityAnalysisTask implements SecurityAnalysis {
@@ -24,6 +27,10 @@ public class SecurityAnalysisTask implements SecurityAnalysis {
     private SecurityAnalysis delegate;
     private Partition partition;
 
+    /**
+     * @param delegate  The security analysis implementation which will actually perform the computation
+     * @param partition The part of the computation to be performed by this task
+     */
     public SecurityAnalysisTask(SecurityAnalysis delegate, Partition partition) {
         this.delegate = Objects.requireNonNull(delegate);
         this.partition = Objects.requireNonNull(partition);

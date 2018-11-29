@@ -6,6 +6,7 @@
  */
 package com.powsybl.security;
 
+import com.powsybl.commons.config.PlatformConfig;
 import com.powsybl.computation.ComputationManager;
 import com.powsybl.computation.Partition;
 import com.powsybl.iidm.network.Network;
@@ -17,6 +18,7 @@ import com.powsybl.security.interceptors.SecurityAnalysisInterceptor;
 import com.powsybl.security.interceptors.SecurityAnalysisInterceptors;
 
 import java.util.*;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
@@ -28,6 +30,9 @@ import java.util.stream.Collectors;
 public class SecurityAnalysisBuilder {
 
 
+    private final PlatformConfig platformConfig;
+    private final Supplier<SecurityAnalysisFactory> defaultFactorySupplier;
+
     private boolean external = false;
     private Integer taskCount = null;
     private Partition part = null;
@@ -37,14 +42,21 @@ public class SecurityAnalysisBuilder {
     private Set<LimitViolationType> limitViolationTypes = EnumSet.allOf(LimitViolationType.class);
     private LimitViolationDetector detector = new DefaultLimitViolationDetector();
 
-    public SecurityAnalysisBuilder external() {
-        external = true;
-        return this;
+    public SecurityAnalysisBuilder() {
+        this(PlatformConfig.defaultConfig(), SecurityAnalysisFactories::newDefaultFactory);
     }
 
-    public SecurityAnalysisBuilder external(int taskCount) {
-        this.external = true;
-        this.taskCount = taskCount;
+    public SecurityAnalysisBuilder(Supplier<SecurityAnalysisFactory> defaultFactorySupplier) {
+        this(PlatformConfig.defaultConfig(), defaultFactorySupplier);
+    }
+
+    public SecurityAnalysisBuilder(PlatformConfig platformConfig, Supplier<SecurityAnalysisFactory> defaultFactorySupplier) {
+        this.platformConfig = Objects.requireNonNull(platformConfig);
+        this.defaultFactorySupplier = Objects.requireNonNull(defaultFactorySupplier);
+    }
+
+    public SecurityAnalysisBuilder external() {
+        external = true;
         return this;
     }
 
@@ -95,34 +107,72 @@ public class SecurityAnalysisBuilder {
         return this;
     }
 
-    public SecurityAnalysis build() {
+    private void minimalChecks() {
+        Objects.requireNonNull(network);
+        Objects.requireNonNull(computationManager);
+    }
 
-        if (external) {
-            ExternalSecurityAnalysisConfig config = ExternalSecurityAnalysisConfig.load();
-            return new ExternalSecurityAnalysis(config, network, computationManager, extensions, taskCount);
+    public ExternalSecurityAnalysis buildExternal() {
+        minimalChecks();
+        return buildExternal(taskCount);
+    }
+
+    public ExternalSecurityAnalysis buildExternal(int taskCount) {
+        minimalChecks();
+        return buildExternal((Integer) taskCount);
+    }
+
+    private ExternalSecurityAnalysis buildExternal(Integer taskCount) {
+        ExternalSecurityAnalysisConfig config = ExternalSecurityAnalysisConfig.load(platformConfig);
+        if (taskCount == null) {
+            return new ExternalSecurityAnalysis(config, network, computationManager, extensions);
         }
+        return new ExternalSecurityAnalysis(config, network, computationManager, extensions, taskCount);
+    }
 
-        if (taskCount != null) {
-            ExternalSecurityAnalysisConfig config = ExternalSecurityAnalysisConfig.load();
-            return new DistributedSecurityAnalysis(config, network, computationManager, extensions, taskCount);
-        }
+    public DistributedSecurityAnalysis buildDistributed(int taskCount) {
+        minimalChecks();
+        ExternalSecurityAnalysisConfig config = ExternalSecurityAnalysisConfig.load(platformConfig);
+        return new DistributedSecurityAnalysis(config, network, computationManager, extensions, taskCount);
+    }
 
+    public SecurityAnalysisTask buildTask(Partition part) {
+        minimalChecks();
+        Objects.requireNonNull(part);
+        return new SecurityAnalysisTask(buildDefault(), part);
+    }
+
+    public SecurityAnalysis buildDefault() {
         Set<SecurityAnalysisInterceptor> interceptors = extensions.stream()
                 .map(SecurityAnalysisInterceptors::createInterceptor)
                 .collect(Collectors.toSet());
 
-        LimitViolationFilter limitViolationFilter = LimitViolationFilter.load();
+        LimitViolationFilter limitViolationFilter = LimitViolationFilter.load(platformConfig);
         limitViolationFilter.setViolationTypes(limitViolationTypes);
 
-        SecurityAnalysis securityAnalysis = SecurityAnalysisFactories.newDefaultFactory()
+        SecurityAnalysis securityAnalysis = defaultFactorySupplier.get()
                 .create(network, detector, limitViolationFilter, computationManager, 0);
         interceptors.forEach(securityAnalysis::addInterceptor);
 
-        if (part != null) {
-            return new SecurityAnalysisTask(securityAnalysis, part);
+        return securityAnalysis;
+    }
+
+    public SecurityAnalysis build() {
+        minimalChecks();
+
+        if (external) {
+            return buildExternal();
         }
 
-        return securityAnalysis;
+        if (taskCount != null) {
+            return buildDistributed(taskCount);
+        }
+
+        if (part != null) {
+            return buildTask(part);
+        }
+
+        return buildDefault();
     }
 
 }

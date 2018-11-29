@@ -184,7 +184,8 @@ public class SecurityAnalysisTool implements Tool {
         }
 
 
-        // Build security analysis : common inputs
+        // Start building security analysis, according to options
+        // Common inputs
         SecurityAnalysisBuilder builder = new SecurityAnalysisBuilder()
                 .network(network)
                 .computationManager(context.getLongTimeExecutionComputationManager())
@@ -194,19 +195,16 @@ public class SecurityAnalysisTool implements Tool {
         options.getValue(WITH_EXTENSIONS_OPTION).ifPresent(builder::extensions);
 
         // Computation distribution options
-        Integer taskCount = options.getInt(TASK_COUNT).orElse(null);
-        boolean external = options.hasOption(EXTERNAL);
-        Partition partition = options.getValue(TASK, Partition::parse).orElse(null);
-        if (external) {
-            if (taskCount != null) {
-                builder.external(taskCount);
-            } else {
-                builder.external();
-            }
-        } else if (partition != null) {
-            builder.computationManager(context.getShortTimeExecutionComputationManager());
-            builder.subTask(partition);
+        if (options.hasOption(EXTERNAL)) {
+            builder.external();
         }
+        options.getInt(TASK_COUNT).ifPresent(builder::distributed);
+
+        //For subtasks, we use the short time computation manager
+        options.getValue(TASK, Partition::parse).ifPresent(p -> {
+            builder.subTask(p);
+            builder.computationManager(context.getShortTimeExecutionComputationManager());
+        });
 
         SecurityAnalysis securityAnalysis = builder.build();
 

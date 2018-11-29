@@ -7,8 +7,6 @@
 package com.powsybl.security.dsl;
 
 import com.google.common.collect.ImmutableSet;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
 import java.util.Set;
@@ -19,8 +17,6 @@ import java.util.Set;
  * @author Sylvain Leclerc <sylvain.leclerc at rte-france.com>
  */
 final class LimitMatchers {
-
-    private static final Logger LOGGER = LoggerFactory.getLogger(LimitMatchers.class);
 
     private LimitMatchers() {
     }
@@ -67,7 +63,7 @@ final class LimitMatchers {
      * A {@link LimitMatcher} which matches the contingency with the specified ID.
      */
     static LimitMatcher contingency(String id) {
-        return (b, s, l, c) -> c.getId().equals(id);
+        return (b, s, l, c) -> c != null && c.getId().equals(id);
     }
 
     /**
@@ -75,7 +71,7 @@ final class LimitMatchers {
      */
     static LimitMatcher contingencies(Collection<String> ids) {
         Set<String> set = ImmutableSet.copyOf(ids);
-        return (b, s, l, c) -> set.contains(c.getId());
+        return (b, s, l, c) -> c != null && set.contains(c.getId());
     }
 
 }

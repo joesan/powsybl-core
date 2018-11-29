@@ -82,6 +82,29 @@ public class LimitFactorsTest {
         assertEquals(0.98f, factors.getFactor(line, Branch.Side.TWO, null, new Contingency("toto")).orElse(1.0f), 0);
     }
 
+    @Test
+    public void testBranches() {
+
+        LimitFactors factors = new LimitFactorsLoader(new GroovyCodeSource(getClass().getResource("/limits-dsl-branches.groovy")))
+                .loadFactors();
+
+        Contingency c1 = new Contingency("contingency1");
+        Contingency c2 = new Contingency("contingency2");
+        assertThat(factors.getFactor(line, Branch.Side.ONE, null, c1))
+                .hasValue(0.95f);
+        assertThat(factors.getFactor(line, Branch.Side.TWO, null, c2))
+                .hasValue(0.95f);
+        assertThat(factors.getFactor(line, Branch.Side.ONE, null, null))
+                .isEmpty();
+
+        assertThat(factors.getFactor(transformer, Branch.Side.ONE, null, c1))
+                .hasValue(0.8f);
+        assertThat(factors.getFactor(transformer, Branch.Side.ONE, null, c2))
+                .isEmpty();
+        assertThat(factors.getFactor(transformer, Branch.Side.ONE, null, null))
+                .isEmpty();
+    }
+
 
     private void checkDetector(LimitViolationDetector detector) {
 
@@ -238,4 +261,5 @@ public class LimitFactorsTest {
                     assertEquals(1200, v.getAcceptableDuration());
                 });
     }
+
 }
