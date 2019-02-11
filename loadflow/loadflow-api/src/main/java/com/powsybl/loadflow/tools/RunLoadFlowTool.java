@@ -10,6 +10,7 @@ import com.google.auto.service.AutoService;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.config.ComponentDefaultConfig;
 import com.powsybl.commons.io.table.*;
+import com.powsybl.iidm.network.Bus;
 import com.powsybl.loadflow.LoadFlowParameters;
 import com.powsybl.loadflow.json.JsonLoadFlowParameters;
 import com.powsybl.tools.Command;
@@ -28,15 +29,12 @@ import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 
-import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.UncheckedIOException;
-import java.io.Writer;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Properties;
+import java.nio.file.Paths;
+import java.util.*;
 
 /**
  * @author Christian Biasuzzi <christian.biasuzzi@techrain.it>
@@ -51,6 +49,10 @@ public class RunLoadFlowTool implements Tool {
     private static final String SKIP_POSTPROC = "skip-postproc";
     private static final String OUTPUT_CASE_FORMAT = "output-case-format";
     private static final String OUTPUT_CASE_FILE = "output-case-file";
+    private static final String COMPARISON_FOLDER = "comparison-folder";
+
+    private static final String ANGLE = ".angle";
+    private static final String V = ".v";
 
     private enum Format {
         CSV,
@@ -112,6 +114,11 @@ public class RunLoadFlowTool implements Tool {
                         .hasArg()
                         .argName("FILE")
                         .build());
+                options.addOption(Option.builder().longOpt(COMPARISON_FOLDER)
+                        .desc("path of folder where comparison files are generated")
+                        .hasArg()
+                        .argName("FOLDER")
+                        .build());
                 return options;
             }
 
@@ -153,6 +160,9 @@ public class RunLoadFlowTool implements Tool {
         if (network == null) {
             throw new PowsyblException("Case '" + caseFile + "' not found");
         }
+
+        Map<String, Double> expected = compareBeforeLoadflow(line, network);
+
         LoadFlow loadFlow = defaultConfig.newFactoryImpl(LoadFlowFactory.class).create(network, context.getShortTimeExecutionComputationManager(), 0);
 
         LoadFlowParameters params = LoadFlowParameters.load();
@@ -169,10 +179,72 @@ public class RunLoadFlowTool implements Tool {
             printResult(result, context);
         }
 
+        compareAfterLoadflow(expected, line, network);
+
         // exports the modified network to the filesystem, if requested
         if (outputCaseFile != null) {
             String outputCaseFormat = line.getOptionValue(OUTPUT_CASE_FORMAT);
             Exporters.export(outputCaseFormat, network, new Properties(), outputCaseFile);
+        }
+    }
+
+    private static Map<String, Double> compareBeforeLoadflow(CommandLine line, Network network) throws IOException {
+        if (line.hasOption(COMPARISON_FOLDER)) {
+            Map<String, Double> expected = new HashMap<>();
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "expected.csv"))) {
+                writer.write("ID;angle;v\n");
+                for (Bus bus : network.getBusBreakerView().getBuses()) {
+                    String id = bus.getId();
+                    writer.write(id + ";" + bus.getAngle() + ";" + bus.getV() + "\n");
+                    expected.put(id + ANGLE, bus.getAngle());
+                    expected.put(id + V, bus.getV());
+                }
+            }
+            return expected;
+        }
+        return null;
+    }
+
+    private static void compareAfterLoadflow(Map<String, Double> expected, CommandLine line, Network network) throws IOException {
+        if (line.hasOption(COMPARISON_FOLDER)) {
+            Objects.requireNonNull(expected);
+            Map<String, Double> diff = new HashMap<>();
+            Set<String> ids = new HashSet<>();
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual.csv"))) {
+                writer.write("ID;angle;v\n");
+                for (Bus bus : network.getBusBreakerView().getBuses()) {
+                    double angle = bus.getAngle();
+                    double v = bus.getV();
+                    String id = bus.getId();
+                    writer.write(id + ";" + angle + ";" + v + "\n");
+                    if (expected.get(id + ANGLE) != angle) {
+                        diff.put(id + ANGLE, angle);
+                    }
+                    if (expected.get(id + V) != v) {
+                        diff.put(id + V, v);
+                    }
+                    ids.add(id + ANGLE);
+                    ids.add(id + V);
+                }
+            }
+            writeDiff(expected, diff, ids, line.getOptionValue(COMPARISON_FOLDER) + "difference.csv");
+        }
+    }
+
+    private static void writeDiff(Map<String, Double> expected, Map<String, Double> diff, Set<String> ids, String file) throws IOException {
+        if (!diff.isEmpty() || !ids.containsAll(expected.keySet())) {
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(file))) {
+                writer.write("ID.attribute;expected;actual\n");
+                for (Map.Entry<String, Double> entry : diff.entrySet()) {
+                    String key = entry.getKey();
+                    writer.write(key + ";" + expected.get(key) + ";" + entry.getValue() + "\n");
+                }
+                for (Map.Entry<String, Double> entry : expected.entrySet()) {
+                    if (!ids.contains(entry.getKey())) {
+                        writer.write(entry.getKey() + ";" + entry.getValue() + ";N/A\n");
+                    }
+                }
+            }
         }
     }
 
