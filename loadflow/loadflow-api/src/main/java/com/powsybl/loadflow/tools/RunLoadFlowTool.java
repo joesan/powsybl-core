@@ -209,7 +209,6 @@ public class RunLoadFlowTool implements Tool {
         if (line.hasOption(COMPARISON_FOLDER)) {
             Objects.requireNonNull(expected);
             Map<String, Double> diff = new HashMap<>();
-            Set<String> ids = new HashSet<>();
             try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual.csv"))) {
                 writer.write("ID;angle;v\n");
                 for (Bus bus : network.getBusBreakerView().getBuses()) {
@@ -217,32 +216,25 @@ public class RunLoadFlowTool implements Tool {
                     double v = bus.getV();
                     String id = bus.getId();
                     writer.write(id + ";" + angle + ";" + v + "\n");
-                    if (expected.get(id + ANGLE) != angle) {
+                    if (!expected.get(id + ANGLE).equals(angle)) {
                         diff.put(id + ANGLE, angle);
                     }
-                    if (expected.get(id + V) != v) {
+                    if (!expected.get(id + V).equals(v)) {
                         diff.put(id + V, v);
                     }
-                    ids.add(id + ANGLE);
-                    ids.add(id + V);
                 }
             }
-            writeDiff(expected, diff, ids, line.getOptionValue(COMPARISON_FOLDER) + "difference.csv");
+            writeDiff(expected, diff, line.getOptionValue(COMPARISON_FOLDER) + "difference.csv");
         }
     }
 
-    private static void writeDiff(Map<String, Double> expected, Map<String, Double> diff, Set<String> ids, String file) throws IOException {
-        if (!diff.isEmpty() || !ids.containsAll(expected.keySet())) {
+    private static void writeDiff(Map<String, Double> expected, Map<String, Double> diff, String file) throws IOException {
+        if (!diff.isEmpty()) {
             try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(file))) {
                 writer.write("ID.attribute;expected;actual\n");
                 for (Map.Entry<String, Double> entry : diff.entrySet()) {
                     String key = entry.getKey();
                     writer.write(key + ";" + expected.get(key) + ";" + entry.getValue() + "\n");
-                }
-                for (Map.Entry<String, Double> entry : expected.entrySet()) {
-                    if (!ids.contains(entry.getKey())) {
-                        writer.write(entry.getKey() + ";" + entry.getValue() + ";N/A\n");
-                    }
                 }
             }
         }
