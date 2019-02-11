@@ -11,6 +11,7 @@ import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.config.ComponentDefaultConfig;
 import com.powsybl.commons.io.table.*;
 import com.powsybl.iidm.network.Bus;
+import com.powsybl.iidm.network.Generator;
 import com.powsybl.loadflow.LoadFlowParameters;
 import com.powsybl.loadflow.json.JsonLoadFlowParameters;
 import com.powsybl.tools.Command;
@@ -53,6 +54,8 @@ public class RunLoadFlowTool implements Tool {
 
     private static final String ANGLE = ".angle";
     private static final String V = ".v";
+    private static final String P = ".p";
+    private static final String Q = ".q";
 
     private enum Format {
         CSV,
@@ -191,13 +194,24 @@ public class RunLoadFlowTool implements Tool {
     private static Map<String, Double> compareBeforeLoadflow(CommandLine line, Network network) throws IOException {
         if (line.hasOption(COMPARISON_FOLDER)) {
             Map<String, Double> expected = new HashMap<>();
-            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "expected.csv"))) {
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "expected_buses.csv"))) {
                 writer.write("ID;angle;v\n");
                 for (Bus bus : network.getBusBreakerView().getBuses()) {
                     String id = bus.getId();
                     writer.write(id + ";" + bus.getAngle() + ";" + bus.getV() + "\n");
                     expected.put(id + ANGLE, bus.getAngle());
                     expected.put(id + V, bus.getV());
+                }
+            }
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "expected_generators.csv"))) {
+                writer.write("ID;p;q\n");
+                for (Generator generator : network.getGenerators()) {
+                    String id = generator.getId();
+                    double p = generator.getTerminal().getP();
+                    double q = generator.getTerminal().getQ();
+                    writer.write(id + ";" + p + ";" + q + "\n");
+                    expected.put(id + P, p);
+                    expected.put(id + Q, q);
                 }
             }
             return expected;
@@ -209,7 +223,7 @@ public class RunLoadFlowTool implements Tool {
         if (line.hasOption(COMPARISON_FOLDER)) {
             Objects.requireNonNull(expected);
             Map<String, Double> diff = new HashMap<>();
-            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual.csv"))) {
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual_buses.csv"))) {
                 writer.write("ID;angle;v\n");
                 for (Bus bus : network.getBusBreakerView().getBuses()) {
                     double angle = bus.getAngle();
@@ -221,6 +235,21 @@ public class RunLoadFlowTool implements Tool {
                     }
                     if (!expected.get(id + V).equals(v)) {
                         diff.put(id + V, v);
+                    }
+                }
+            }
+            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual_generators.csv"))) {
+                writer.write("ID;p;q\n");
+                for (Generator generator : network.getGenerators()) {
+                    String id = generator.getId();
+                    double p = generator.getTerminal().getP();
+                    double q = generator.getTerminal().getQ();
+                    writer.write(id + ";" + p + ";" + q + "\n");
+                    if (!expected.get(id + P).equals(p)) {
+                        diff.put(id + P, p);
+                    }
+                    if (!expected.get(id + Q).equals(q)) {
+                        diff.put(id + Q, q);
                     }
                 }
             }
