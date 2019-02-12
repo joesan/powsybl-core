@@ -10,8 +10,7 @@ import com.google.auto.service.AutoService;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.config.ComponentDefaultConfig;
 import com.powsybl.commons.io.table.*;
-import com.powsybl.iidm.network.Bus;
-import com.powsybl.iidm.network.Generator;
+import com.powsybl.iidm.network.*;
 import com.powsybl.loadflow.LoadFlowParameters;
 import com.powsybl.loadflow.json.JsonLoadFlowParameters;
 import com.powsybl.tools.Command;
@@ -20,7 +19,6 @@ import com.powsybl.tools.ToolRunningContext;
 import com.powsybl.iidm.export.Exporters;
 import com.powsybl.iidm.import_.ImportConfig;
 import com.powsybl.iidm.import_.Importers;
-import com.powsybl.iidm.network.Network;
 import com.powsybl.loadflow.LoadFlow;
 import com.powsybl.loadflow.LoadFlowFactory;
 import com.powsybl.loadflow.LoadFlowResult;
@@ -36,6 +34,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.function.Function;
 
 /**
  * @author Christian Biasuzzi <christian.biasuzzi@techrain.it>
@@ -50,12 +49,18 @@ public class RunLoadFlowTool implements Tool {
     private static final String SKIP_POSTPROC = "skip-postproc";
     private static final String OUTPUT_CASE_FORMAT = "output-case-format";
     private static final String OUTPUT_CASE_FILE = "output-case-file";
-    private static final String COMPARISON_FOLDER = "comparison-folder";
+    private static final String COMPARISON_FILE = "comparison-file";
 
     private static final String ANGLE = ".angle";
     private static final String V = ".v";
     private static final String P = ".p";
     private static final String Q = ".q";
+    private static final String P1 = ".p1";
+    private static final String P2 = ".p2";
+    private static final String P3 = ".p3";
+    private static final String Q1 = ".q1";
+    private static final String Q2 = ".q2";
+    private static final String Q3 = ".q3";
 
     private enum Format {
         CSV,
@@ -117,10 +122,10 @@ public class RunLoadFlowTool implements Tool {
                         .hasArg()
                         .argName("FILE")
                         .build());
-                options.addOption(Option.builder().longOpt(COMPARISON_FOLDER)
-                        .desc("path of folder where comparison files are generated")
+                options.addOption(Option.builder().longOpt(COMPARISON_FILE)
+                        .desc("path of file where comparison files is generated")
                         .hasArg()
-                        .argName("FOLDER")
+                        .argName("FILE")
                         .build());
                 return options;
             }
@@ -164,7 +169,10 @@ public class RunLoadFlowTool implements Tool {
             throw new PowsyblException("Case '" + caseFile + "' not found");
         }
 
-        Map<String, Double> expected = compareBeforeLoadflow(line, network);
+        Map<String, Double> expected = null;
+        if (line.hasOption(COMPARISON_FILE)) {
+            expected = loadExpectedResults(network);
+        }
 
         LoadFlow loadFlow = defaultConfig.newFactoryImpl(LoadFlowFactory.class).create(network, context.getShortTimeExecutionComputationManager(), 0);
 
@@ -182,7 +190,10 @@ public class RunLoadFlowTool implements Tool {
             printResult(result, context);
         }
 
-        compareAfterLoadflow(expected, line, network);
+        if (line.hasOption(COMPARISON_FILE)) {
+            Map<String, Double> diff = compare(expected, network);
+            writeDiff(expected, diff, line.getOptionValue(COMPARISON_FILE));
+        }
 
         // exports the modified network to the filesystem, if requested
         if (outputCaseFile != null) {
@@ -191,79 +202,115 @@ public class RunLoadFlowTool implements Tool {
         }
     }
 
-    private static Map<String, Double> compareBeforeLoadflow(CommandLine line, Network network) throws IOException {
-        if (line.hasOption(COMPARISON_FOLDER)) {
-            Map<String, Double> expected = new HashMap<>();
-            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "expected_buses.csv"))) {
-                writer.write("ID;angle;v\n");
-                for (Bus bus : network.getBusBreakerView().getBuses()) {
-                    String id = bus.getId();
-                    writer.write(id + ";" + bus.getAngle() + ";" + bus.getV() + "\n");
-                    expected.put(id + ANGLE, bus.getAngle());
-                    expected.put(id + V, bus.getV());
-                }
-            }
-            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "expected_generators.csv"))) {
-                writer.write("ID;p;q\n");
-                for (Generator generator : network.getGenerators()) {
-                    String id = generator.getId();
-                    double p = generator.getTerminal().getP();
-                    double q = generator.getTerminal().getQ();
-                    writer.write(id + ";" + p + ";" + q + "\n");
-                    expected.put(id + P, p);
-                    expected.put(id + Q, q);
-                }
-            }
-            return expected;
-        }
-        return null;
+    private Map<String, Double> loadExpectedResults(Network network) {
+        Objects.requireNonNull(network);
+        Map<String, Double> expected = new HashMap<>();
+        loadBuses(Collections.emptyMap(), expected, network);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getGenerators);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getShuntCompensators);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getLoads);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getStaticVarCompensators);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getLccConverterStations);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getVscConverterStations);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getBusbarSections);
+        loadInjections(Collections.emptyMap(), expected, network, Network::getDanglingLines);
+        loadBranches(Collections.emptyMap(), expected, network, Network::getLines);
+        loadBranches(Collections.emptyMap(), expected, network, Network::getTwoWindingsTransformers);
+        loadThreeWindingsTransformers(Collections.emptyMap(), expected, network);
+        return expected;
     }
 
-    private static void compareAfterLoadflow(Map<String, Double> expected, CommandLine line, Network network) throws IOException {
-        if (line.hasOption(COMPARISON_FOLDER)) {
-            Objects.requireNonNull(expected);
-            Map<String, Double> diff = new HashMap<>();
-            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual_buses.csv"))) {
-                writer.write("ID;angle;v\n");
-                for (Bus bus : network.getBusBreakerView().getBuses()) {
-                    double angle = bus.getAngle();
-                    double v = bus.getV();
-                    String id = bus.getId();
-                    writer.write(id + ";" + angle + ";" + v + "\n");
-                    if (!expected.get(id + ANGLE).equals(angle)) {
-                        diff.put(id + ANGLE, angle);
-                    }
-                    if (!expected.get(id + V).equals(v)) {
-                        diff.put(id + V, v);
-                    }
-                }
-            }
-            try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(line.getOptionValue(COMPARISON_FOLDER) + "actual_generators.csv"))) {
-                writer.write("ID;p;q\n");
-                for (Generator generator : network.getGenerators()) {
-                    String id = generator.getId();
-                    double p = generator.getTerminal().getP();
-                    double q = generator.getTerminal().getQ();
-                    writer.write(id + ";" + p + ";" + q + "\n");
-                    if (!expected.get(id + P).equals(p)) {
-                        diff.put(id + P, p);
-                    }
-                    if (!expected.get(id + Q).equals(q)) {
-                        diff.put(id + Q, q);
-                    }
-                }
-            }
-            writeDiff(expected, diff, line.getOptionValue(COMPARISON_FOLDER) + "difference.csv");
+    private Map<String, Double> compare(Map<String, Double> expected, Network network) {
+        Objects.requireNonNull(expected);
+        Objects.requireNonNull(network);
+        Map<String, Double> diff = new HashMap<>();
+        loadBuses(expected, diff, network);
+        loadInjections(expected, diff, network, Network::getGenerators);
+        loadInjections(expected, diff, network, Network::getShuntCompensators);
+        loadInjections(expected, diff, network, Network::getLoads);
+        loadInjections(expected, diff, network, Network::getStaticVarCompensators);
+        loadInjections(expected, diff, network, Network::getLccConverterStations);
+        loadInjections(expected, diff, network, Network::getVscConverterStations);
+        loadInjections(expected, diff, network, Network::getBusbarSections);
+        loadInjections(expected, diff, network, Network::getDanglingLines);
+        loadBranches(expected, diff, network, Network::getLines);
+        loadBranches(expected, diff, network, Network::getTwoWindingsTransformers);
+        loadThreeWindingsTransformers(expected, diff, network);
+        return diff;
+    }
+
+    private void loadBuses(Map<String, Double> previous, Map<String, Double> map, Network network) {
+        Objects.requireNonNull(previous);
+        Objects.requireNonNull(map);
+        Objects.requireNonNull(network);
+        for (Bus bus : network.getBusBreakerView().getBuses()) {
+            String id = bus.getId();
+            fillDiffMap(id + ANGLE, bus.getAngle(), previous, map);
+            fillDiffMap(id + V, bus.getV(), previous, map);
         }
     }
 
-    private static void writeDiff(Map<String, Double> expected, Map<String, Double> diff, String file) throws IOException {
-        if (!diff.isEmpty()) {
+    private <T extends Injection<T>> void loadInjections(Map<String, Double> previous, Map<String, Double> map, Network network, Function<Network, Iterable<T>> function) {
+        for (T t : function.apply(network)) {
+            String id = t.getId();
+            fillDiffMap(id + P, t.getTerminal().getP(), previous, map);
+            fillDiffMap(id + Q, t.getTerminal().getQ(), previous, map);
+        }
+    }
+
+    private <T extends Branch<T>> void loadBranches(Map<String, Double> previous, Map<String, Double> map, Network network, Function<Network, Iterable<T>> function) {
+        for (T t : function.apply(network)) {
+            String id = t.getId();
+            fillDiffMap(id + P1, t.getTerminal1().getP(), previous, map);
+            fillDiffMap(id + P2, t.getTerminal2().getP(), previous, map);
+            fillDiffMap(id + Q1, t.getTerminal1().getQ(), previous, map);
+            fillDiffMap(id + Q2, t.getTerminal2().getQ(), previous, map);
+        }
+    }
+
+    private void loadThreeWindingsTransformers(Map<String, Double> previous, Map<String, Double> map, Network network) {
+        for (ThreeWindingsTransformer t : network.getThreeWindingsTransformers()) {
+            String id = t.getId();
+            fillDiffMap(id + P1, t.getLeg1().getTerminal().getP(), previous, map);
+            fillDiffMap(id + P2, t.getLeg2().getTerminal().getP(), previous, map);
+            fillDiffMap(id + P3, t.getLeg3().getTerminal().getP(), previous, map);
+            fillDiffMap(id + Q1, t.getLeg1().getTerminal().getQ(), previous, map);
+            fillDiffMap(id + Q2, t.getLeg2().getTerminal().getQ(), previous, map);
+            fillDiffMap(id + Q3, t.getLeg3().getTerminal().getQ(), previous, map);
+        }
+    }
+
+    private void fillDiffMap(String key, double value, Map<String, Double> previous, Map<String, Double> map) {
+        if (previous.get(key) == null || !previous.get(key).equals(value)) {
+            map.put(key, value);
+        } else {
+            previous.remove(key);
+        }
+    }
+
+    private void writeDiff(Map<String, Double> expected, Map<String, Double> diff, String file) throws IOException {
+        Objects.requireNonNull(file);
+        if (!diff.isEmpty() || !expected.isEmpty()) {
             try (BufferedWriter writer = Files.newBufferedWriter(Paths.get(file))) {
-                writer.write("ID.attribute;expected;actual\n");
-                for (Map.Entry<String, Double> entry : diff.entrySet()) {
-                    String key = entry.getKey();
-                    writer.write(key + ";" + expected.get(key) + ";" + entry.getValue() + "\n");
+                try (TableFormatter formatter = new CsvTableFormatter(writer,
+                        "comparison before and after computation",
+                        TableFormatterConfig.load(),
+                        new Column("ID.attribute"),
+                        new Column("expected"),
+                        new Column("actual"))) {
+                    for (Map.Entry<String, Double> entry : diff.entrySet()) {
+                        String key = entry.getKey();
+                        formatter.writeCell(key);
+                        formatter.writeCell(expected.get(key));
+                        formatter.writeCell(entry.getValue());
+                        expected.remove(key);
+                    }
+                    for (Map.Entry<String, Double> entry : expected.entrySet()) {
+                        String key = entry.getKey();
+                        formatter.writeCell(key);
+                        formatter.writeCell(expected.get(key));
+                        formatter.writeCell("null");
+                    }
                 }
             }
         }
